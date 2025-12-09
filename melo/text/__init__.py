@@ -1,8 +1,8 @@
-from .symbols import symbols, language_tone_start_map, language_id_map
+# Importar todo de symbols para mantener compatibilidad
+from .symbols import *
 
-
+# Crear el diccionario de símbolos
 _symbol_to_id = {s: i for i, s in enumerate(symbols)}
-
 
 def cleaned_text_to_sequence(cleaned_text, tones, language, symbol_to_id=None):
     """Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
