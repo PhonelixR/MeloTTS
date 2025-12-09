@@ -2,6 +2,7 @@ import torch
 import torch.utils.data
 import librosa
 from librosa.filters import mel as librosa_mel_fn
+import numpy as np
 
 MAX_WAV_VALUE = 32768.0
 
@@ -59,18 +60,37 @@ def spectrogram_torch(y, n_fft, sampling_rate, hop_size, win_size, center=False)
     )
     y = y.squeeze(1)
 
-    spec = torch.stft(
-        y,
-        n_fft,
-        hop_length=hop_size,
-        win_length=win_size,
-        window=hann_window[wnsize_dtype_device],
-        center=center,
-        pad_mode="reflect",
-        normalized=False,
-        onesided=True,
-        return_complex=False,
-    )
+    # Compatibilidad con PyTorch >= 2.0 (return_complex obsoleto)
+    try:
+        # PyTorch < 2.0
+        spec = torch.stft(
+            y,
+            n_fft,
+            hop_length=hop_size,
+            win_length=win_size,
+            window=hann_window[wnsize_dtype_device],
+            center=center,
+            pad_mode="reflect",
+            normalized=False,
+            onesided=True,
+            return_complex=False,
+        )
+    except TypeError:
+        # PyTorch >= 2.0
+        spec_complex = torch.stft(
+            y,
+            n_fft,
+            hop_length=hop_size,
+            win_length=win_size,
+            window=hann_window[wnsize_dtype_device],
+            center=center,
+            pad_mode="reflect",
+            normalized=False,
+            onesided=True,
+            return_complex=True,
+        )
+        # Convertir de complejo a formato real (2 canales)
+        spec = torch.stack([spec_complex.real, spec_complex.imag], dim=-1)
 
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
     return spec
@@ -85,30 +105,44 @@ def spectrogram_torch_conv(y, n_fft, sampling_rate, hop_size, win_size, center=F
 
     y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
     
-    # ******************** original ************************#
-    # y = y.squeeze(1)
-    # spec1 = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[wnsize_dtype_device],
-    #                   center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=False)
+    # Reemplazo de librosa.util.pad_center con PyTorch nativo
+    pad = n_fft - win_size
+    pad_left = pad // 2
+    pad_right = pad - pad_left
+    window_padded = torch.nn.functional.pad(
+        torch.hann_window(win_size, device=y.device, dtype=y.dtype), 
+        (pad_left, pad_right), 
+        mode='constant', 
+        value=0
+    )
 
     # ******************** ConvSTFT ************************#
     freq_cutoff = n_fft // 2 + 1
-    fourier_basis = torch.view_as_real(torch.fft.fft(torch.eye(n_fft)))
+    fourier_basis = torch.view_as_real(torch.fft.fft(torch.eye(n_fft, device=y.device, dtype=y.dtype)))
     forward_basis = fourier_basis[:freq_cutoff].permute(2, 0, 1).reshape(-1, 1, fourier_basis.shape[1])
-    forward_basis = forward_basis * torch.as_tensor(librosa.util.pad_center(torch.hann_window(win_size), size=n_fft)).float()
+    forward_basis = forward_basis * window_padded.float()
 
     import torch.nn.functional as F
 
-    # if center:
-    #     signal = F.pad(y[:, None, None, :], (n_fft // 2, n_fft // 2, 0, 0), mode = 'reflect').squeeze(1)
     assert center is False
 
-    forward_transform_squared = F.conv1d(y, forward_basis.to(y.device), stride = hop_size)
-    spec2 = torch.stack([forward_transform_squared[:, :freq_cutoff, :], forward_transform_squared[:, freq_cutoff:, :]], dim = -1)
-
+    forward_transform_squared = F.conv1d(y, forward_basis.to(y.device), stride=hop_size)
+    spec2 = torch.stack([forward_transform_squared[:, :freq_cutoff, :], forward_transform_squared[:, freq_cutoff:, :]], dim=-1)
 
     # ******************** Verification ************************#
-    spec1 = torch.stft(y.squeeze(1), n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[wnsize_dtype_device],
-                      center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=False)
+    # Compatibilidad con PyTorch >= 2.0
+    try:
+        # PyTorch < 2.0
+        spec1 = torch.stft(y.squeeze(1), n_fft, hop_length=hop_size, win_length=win_size, 
+                          window=hann_window[wnsize_dtype_device], center=center, pad_mode='reflect', 
+                          normalized=False, onesided=True, return_complex=False)
+    except TypeError:
+        # PyTorch >= 2.0
+        spec1_complex = torch.stft(y.squeeze(1), n_fft, hop_length=hop_size, win_length=win_size,
+                                  window=hann_window[wnsize_dtype_device], center=center, pad_mode='reflect',
+                                  normalized=False, onesided=True, return_complex=True)
+        spec1 = torch.stack([spec1_complex.real, spec1_complex.imag], dim=-1)
+    
     assert torch.allclose(spec1, spec2, atol=1e-4)
 
     spec = torch.sqrt(spec2.pow(2).sum(-1) + 1e-6)
@@ -153,18 +187,36 @@ def mel_spectrogram_torch(
     )
     y = y.squeeze(1)
 
-    spec = torch.stft(
-        y,
-        n_fft,
-        hop_length=hop_size,
-        win_length=win_size,
-        window=hann_window[wnsize_dtype_device],
-        center=center,
-        pad_mode="reflect",
-        normalized=False,
-        onesided=True,
-        return_complex=False,
-    )
+    # Compatibilidad con PyTorch >= 2.0
+    try:
+        # PyTorch < 2.0
+        spec = torch.stft(
+            y,
+            n_fft,
+            hop_length=hop_size,
+            win_length=win_size,
+            window=hann_window[wnsize_dtype_device],
+            center=center,
+            pad_mode="reflect",
+            normalized=False,
+            onesided=True,
+            return_complex=False,
+        )
+    except TypeError:
+        # PyTorch >= 2.0
+        spec_complex = torch.stft(
+            y,
+            n_fft,
+            hop_length=hop_size,
+            win_length=win_size,
+            window=hann_window[wnsize_dtype_device],
+            center=center,
+            pad_mode="reflect",
+            normalized=False,
+            onesided=True,
+            return_complex=True,
+        )
+        spec = torch.stack([spec_complex.real, spec_complex.imag], dim=-1)
 
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
 
