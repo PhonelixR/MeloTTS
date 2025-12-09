@@ -15,6 +15,7 @@ jamo
 gruut[de,es,fr]
 g2pkk
 librosa
+soundfile
 pydub
 eng_to_ipa
 inflect
