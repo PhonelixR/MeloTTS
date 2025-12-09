@@ -1,8 +1,27 @@
-# Importar todo de symbols para mantener compatibilidad
-from .symbols import *
+# Importar lo necesario de symbols
+from .symbols import (
+    punctuation,
+    symbols,
+    language_tone_start_map,
+    language_id_map,
+    num_languages,
+    num_tones,
+    sil_phonemes_ids,
+    zh_symbols,
+    ja_symbols,
+    en_symbols,
+    kr_symbols,
+    es_symbols,
+    fr_symbols,
+    de_symbols,
+    ru_symbols,
+    pu_symbols,
+    normal_symbols
+)
 
 # Crear el diccionario de símbolos
 _symbol_to_id = {s: i for i, s in enumerate(symbols)}
+
 
 def cleaned_text_to_sequence(cleaned_text, tones, language, symbol_to_id=None):
     """Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
@@ -41,3 +60,27 @@ def get_bert(norm_text, word2ph, language, device):
     
     bert = bert_func(norm_text, word2ph, device)
     return bert
+
+
+# Exportar explícitamente para que estén disponibles cuando se importe el módulo
+__all__ = [
+    'punctuation',
+    'symbols',
+    'language_tone_start_map',
+    'language_id_map',
+    'num_languages',
+    'num_tones',
+    'sil_phonemes_ids',
+    'zh_symbols',
+    'ja_symbols',
+    'en_symbols',
+    'kr_symbols',
+    'es_symbols',
+    'fr_symbols',
+    'de_symbols',
+    'ru_symbols',
+    'pu_symbols',
+    'normal_symbols',
+    'cleaned_text_to_sequence',
+    'get_bert',
+]
