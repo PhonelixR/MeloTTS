@@ -226,9 +226,42 @@ def load_wav_to_torch(full_path):
 
 
 def load_wav_to_torch_new(full_path):
-    audio_norm, sampling_rate = torchaudio.load(full_path, frame_offset=0, num_frames=-1, normalize=True, channels_first=True)
-    audio_norm = audio_norm.mean(dim=0)
+    """Versión compatible con torchaudio 0.11.0+"""
+    try:
+        # Intento 1: Usar torchaudio.load sin parámetros obsoletos
+        audio, sampling_rate = torchaudio.load(full_path, channels_first=True)
+        
+        # Normalizar manualmente si es necesario
+        if audio.dtype == torch.int16:
+            audio = audio.float() / 32768.0
+        elif audio.dtype == torch.int32:
+            audio = audio.float() / 2147483648.0
+        # torch.float32 ya está normalizado
+        
+        # Convertir a mono si es estéreo
+        if audio.shape[0] > 1:
+            audio = audio.mean(dim=0, keepdim=True)
+        
+        audio_norm = audio.squeeze(0)
+        
+    except TypeError as e:
+        # Intento 2: Si falla por parámetros obsoletos, usar la API antigua
+        try:
+            audio_norm, sampling_rate = torchaudio.load(
+                full_path, 
+                frame_offset=0, 
+                num_frames=-1, 
+                normalize=True, 
+                channels_first=True
+            )
+            audio_norm = audio_norm.mean(dim=0)
+        except Exception as e2:
+            # Intento 3: Fallback a scipy
+            warnings.warn(f"torchaudio falló, usando scipy: {e2}")
+            return load_wav_to_torch(full_path)
+    
     return audio_norm, sampling_rate
+
 
 def load_wav_to_torch_librosa(full_path, sr):
     audio_norm, sampling_rate = librosa.load(full_path, sr=sr, mono=True)
