@@ -27,3 +27,6 @@ langid
 tqdm
 tensorboard
 loguru
+numpy
+soundfile
+click
