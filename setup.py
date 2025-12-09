@@ -8,6 +8,7 @@ cwd = os.path.dirname(os.path.abspath(__file__))
 
 with open('requirements.txt') as f:
     reqs = f.read().splitlines()
+    
 class PostInstallCommand(install):
     """Post-installation for installation mode."""
     def run(self):
