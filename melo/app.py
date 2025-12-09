@@ -1,6 +1,5 @@
 # WebUI by mrfakename <X @realmrfakename / HF @mrfakename>
 # Demo also available on HF Spaces: https://huggingface.co/spaces/mrfakename/MeloTTS
-# Updated for Gradio 5.50.0 compatibility
 import gradio as gr
 import os, torch, io
 # os.system('python -m unidic download')
@@ -31,19 +30,14 @@ default_text_dict = {
     
 def synthesize(speaker, text, speed, language, progress=gr.Progress()):
     bio = io.BytesIO()
-    # Updated for Gradio 5.50.0: progress is callable, no .tqdm attribute
-    models[language].tts_to_file(text, models[language].hps.data.spk2id[speaker], 
-                                bio, speed=speed, pbar=progress, format='wav')
+    models[language].tts_to_file(text, models[language].hps.data.spk2id[speaker], bio, speed=speed, pbar=progress.tqdm, format='wav')
     return bio.getvalue()
-
 def load_speakers(language, text):
     if text in list(default_text_dict.values()):
         newtext = default_text_dict[language]
     else:
         newtext = text
-    return gr.update(value=list(models[language].hps.data.spk2id.keys())[0], 
-                    choices=list(models[language].hps.data.spk2id.keys())), newtext
-
+    return gr.update(value=list(models[language].hps.data.spk2id.keys())[0], choices=list(models[language].hps.data.spk2id.keys())), newtext
 with gr.Blocks() as demo:
     gr.Markdown('# MeloTTS WebUI\n\nA WebUI for MeloTTS.')
     with gr.Group():
@@ -56,15 +50,12 @@ with gr.Blocks() as demo:
     aud = gr.Audio(interactive=False)
     btn.click(synthesize, inputs=[speaker, text, speed, language], outputs=[aud])
     gr.Markdown('WebUI by [mrfakename](https://twitter.com/realmrfakename).')
-
 @click.command()
-@click.option('--share', '-s', is_flag=True, show_default=True, default=False, 
-              help="Expose a publicly-accessible shared Gradio link usable by anyone with the link. Only share the link with people you trust.")
+@click.option('--share', '-s', is_flag=True, show_default=True, default=False, help="Expose a publicly-accessible shared Gradio link usable by anyone with the link. Only share the link with people you trust.")
 @click.option('--host', '-h', default=None)
 @click.option('--port', '-p', type=int, default=None)
 def main(share, host, port):
-    # Updated for Gradio 5.50.0: show_api parameter removed
-    demo.queue(api_open=False).launch(share=share, server_name=host, server_port=port)
+    demo.queue(api_open=False).launch(show_api=False, share=share, server_name=host, server_port=port)
 
 if __name__ == "__main__":
     main()
