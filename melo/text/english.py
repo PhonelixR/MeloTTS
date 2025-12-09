@@ -1,6 +1,7 @@
 import pickle
 import os
 import re
+import nltk
 from g2p_en import G2p
 
 from . import symbols
@@ -11,100 +12,50 @@ from .english_utils.number_norm import normalize_numbers
 from .japanese import distribute_phone
 
 from transformers import AutoTokenizer
+import warnings
 
 current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
 CACHE_PATH = os.path.join(current_file_path, "cmudict_cache.pickle")
-_g2p = G2p()
+
+# ====== INICIALIZACIÓN ROBUSTA DE G2P ======
+def _init_g2p():
+    """Inicialización robusta de G2p con descarga automática de recursos NLTK"""
+    try:
+        # Descargar recursos NLTK necesarios
+        nltk_resources = ['averaged_perceptron_tagger', 'punkt', 'cmudict']
+        for resource in nltk_resources:
+            try:
+                nltk.data.find(f'taggers/{resource}' if resource == 'averaged_perceptron_tagger' else f'tokenizers/{resource}' if resource == 'punkt' else f'corpora/{resource}')
+            except LookupError:
+                print(f"📥 Descargando recurso NLTK: {resource}")
+                nltk.download(resource, quiet=True)
+        
+        # Inicializar G2p
+        return G2p()
+    except Exception as e:
+        warnings.warn(f"⚠️ No se pudo inicializar g2p_en: {e}")
+        print("💡 Solución: Ejecuta en Colab: pip install g2p_en==2.1.0")
+        return None
+
+# Inicializar G2p con manejo de errores
+_g2p = _init_g2p()
 
 arpa = {
-    "AH0",
-    "S",
-    "AH1",
-    "EY2",
-    "AE2",
-    "EH0",
-    "OW2",
-    "UH0",
-    "NG",
-    "B",
-    "G",
-    "AY0",
-    "M",
-    "AA0",
-    "F",
-    "AO0",
-    "ER2",
-    "UH1",
-    "IY1",
-    "AH2",
-    "DH",
-    "IY0",
-    "EY1",
-    "IH0",
-    "K",
-    "N",
-    "W",
-    "IY2",
-    "T",
-    "AA1",
-    "ER1",
-    "EH2",
-    "OY0",
-    "UH2",
-    "UW1",
-    "Z",
-    "AW2",
-    "AW1",
-    "V",
-    "UW2",
-    "AA2",
-    "ER",
-    "AW0",
-    "UW0",
-    "R",
-    "OW1",
-    "EH1",
-    "ZH",
-    "AE0",
-    "IH2",
-    "IH",
-    "Y",
-    "JH",
-    "P",
-    "AY1",
-    "EY0",
-    "OY2",
-    "TH",
-    "HH",
-    "D",
-    "ER0",
-    "CH",
-    "AO1",
-    "AE1",
-    "AO2",
-    "OY1",
-    "AY2",
-    "IH1",
-    "OW0",
-    "L",
-    "SH",
+    "AH0", "S", "AH1", "EY2", "AE2", "EH0", "OW2", "UH0", "NG", "B",
+    "G", "AY0", "M", "AA0", "F", "AO0", "ER2", "UH1", "IY1", "AH2",
+    "DH", "IY0", "EY1", "IH0", "K", "N", "W", "IY2", "T", "AA1",
+    "ER1", "EH2", "OY0", "UH2", "UW1", "Z", "AW2", "AW1", "V", "UW2",
+    "AA2", "ER", "AW0", "UW0", "R", "OW1", "EH1", "ZH", "AE0", "IH2",
+    "IH", "Y", "JH", "P", "AY1", "EY0", "OY2", "TH", "HH", "D", "ER0",
+    "CH", "AO1", "AE1", "AO2", "OY1", "AY2", "IH1", "OW0", "L", "SH",
 }
 
 
 def post_replace_ph(ph):
     rep_map = {
-        "：": ",",
-        "；": ",",
-        "，": ",",
-        "。": ".",
-        "！": "!",
-        "？": "?",
-        "\n": ".",
-        "·": ",",
-        "、": ",",
-        "...": "…",
-        "v": "V",
+        "：": ",", "；": ",", "，": ",", "。": ".", "！": "!", "？": "?",
+        "\n": ".", "·": ",", "、": ",", "...": "…", "v": "V",
     }
     if ph in rep_map.keys():
         ph = rep_map[ph]
@@ -187,9 +138,9 @@ def text_normalize(text):
 
 model_id = 'bert-base-uncased'
 tokenizer = AutoTokenizer.from_pretrained(model_id)
+
 def g2p_old(text):
     tokenized = tokenizer.tokenize(text)
-    # import pdb; pdb.set_trace()
     phones = []
     tones = []
     words = re.split(r"([,;.\-\?\!\s+])", text)
@@ -199,6 +150,8 @@ def g2p_old(text):
             phones += phns
             tones += tns
         else:
+            if _g2p is None:
+                raise RuntimeError("❌ G2p no está inicializado. Ejecuta: pip install g2p_en==2.1.0")
             phone_list = list(filter(lambda p: p != " ", _g2p(w)))
             for ph in phone_list:
                 if ph in arpa:
@@ -208,17 +161,19 @@ def g2p_old(text):
                 else:
                     phones.append(ph)
                     tones.append(0)
-    # todo: implement word2ph
-    word2ph = [1 for i in phones]
+    word2ph = [1 for _ in phones]
 
     phones = [post_replace_ph(i) for i in phones]
     return phones, tones, word2ph
 
+
 def g2p(text, pad_start_end=True, tokenized=None):
+    if _g2p is None:
+        raise RuntimeError("❌ G2p no está inicializado. Ejecuta: pip install g2p_en==2.1.0")
+    
     if tokenized is None:
         tokenized = tokenizer.tokenize(text)
-    # import pdb; pdb.set_trace()
-    phs = []
+    
     ph_groups = []
     for t in tokenized:
         if not t.startswith("#"):
@@ -239,46 +194,46 @@ def g2p(text, pad_start_end=True, tokenized=None):
             tones += tns
             phone_len += len(phns)
         else:
-            phone_list = list(filter(lambda p: p != " ", _g2p(w)))
-            for ph in phone_list:
-                if ph in arpa:
-                    ph, tn = refine_ph(ph)
-                    phones.append(ph)
-                    tones.append(tn)
-                else:
-                    phones.append(ph)
-                    tones.append(0)
+            try:
+                phone_list = list(filter(lambda p: p != " ", _g2p(w)))
+                for ph in phone_list:
+                    if ph in arpa:
+                        ph, tn = refine_ph(ph)
+                        phones.append(ph)
+                        tones.append(tn)
+                    else:
+                        phones.append(ph)
+                        tones.append(0)
+                    phone_len += 1
+            except Exception as e:
+                warnings.warn(f"⚠️ Error en g2p para palabra '{w}': {e}")
+                # Fallback: agregar un fonema UNK
+                phones.append("UNK")
+                tones.append(0)
                 phone_len += 1
+        
         aaa = distribute_phone(phone_len, word_len)
         word2ph += aaa
+    
     phones = [post_replace_ph(i) for i in phones]
 
     if pad_start_end:
         phones = ["_"] + phones + ["_"]
         tones = [0] + tones + [0]
         word2ph = [1] + word2ph + [1]
+    
     return phones, tones, word2ph
+
 
 def get_bert_feature(text, word2ph, device=None):
     from text import english_bert
-
     return english_bert.get_bert_feature(text, word2ph, device=device)
 
+
 if __name__ == "__main__":
-    # print(get_dict())
-    # print(eng_word_to_phoneme("hello"))
     from text.english_bert import get_bert_feature
     text = "In this paper, we propose 1 DSPGAN, a N-F-T GAN-based universal vocoder."
     text = text_normalize(text)
     phones, tones, word2ph = g2p(text)
-    import pdb; pdb.set_trace()
     bert = get_bert_feature(text, word2ph)
-    
     print(phones, tones, word2ph, bert.shape)
-
-    # all_phones = set()
-    # for k, syllables in eng_dict.items():
-    #     for group in syllables:
-    #         for ph in group:
-    #             all_phones.add(ph)
-    # print(all_phones)
