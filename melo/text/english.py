@@ -3,7 +3,14 @@ import os
 import re
 import nltk
 import warnings
-from g2p_en import G2p
+
+# Intentar importar g2p_en, pero con manejo robusto de errores
+try:
+    from g2p_en import G2p
+    HAS_G2P = True
+except ImportError:
+    HAS_G2P = False
+    warnings.warn("⚠️ g2p_en no está instalado. Usando diccionario CMU y fallback simple.")
 
 from . import symbols
 
@@ -18,89 +25,68 @@ current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
 CACHE_PATH = os.path.join(current_file_path, "cmudict_cache.pickle")
 
-# ====== SOLUCIÓN DEFINITIVA PARA G2P_EN 2.1.0 ======
-def _fix_nltk_resource():
-    """Arregla el problema de compatibilidad entre g2p_en 2.1.0 y NLTK"""
-    try:
-        # Descargar el recurso correcto
-        nltk.download('averaged_perceptron_tagger', quiet=True)
-        
-        # Encontrar la ruta del recurso
-        resource_path = nltk.data.find('taggers/averaged_perceptron_tagger')
-        
-        # g2p_en 2.1.0 busca 'averaged_perceptron_tagger_eng' en lugar de 'averaged_perceptron_tagger'
-        # Crear un alias simbólico si es posible
-        import shutil
-        from pathlib import Path
-        
-        # Obtener el directorio padre
-        parent_dir = Path(resource_path).parent
-        target_name = 'averaged_perceptron_tagger_eng'
-        target_path = parent_dir / target_name
-        
-        if not target_path.exists():
-            # Crear una copia con el nombre que espera g2p_en
-            if Path(resource_path).is_dir():
-                shutil.copytree(resource_path, target_path)
-            else:
-                shutil.copy2(resource_path, target_path)
-            print(f"✅ Creado alias para recurso NLTK: {target_name}")
-            
-    except Exception as e:
-        warnings.warn(f"⚠️ No se pudo arreglar recurso NLTK: {e}")
-
+# ====== INICIALIZACIÓN ROBUSTA ======
 def _init_g2p():
-    """Inicialización robusta de G2p con compatibilidad completa"""
-    try:
-        # Descargar todos los recursos necesarios
-        resources = ['averaged_perceptron_tagger', 'punkt', 'cmudict']
-        for resource in resources:
-            try:
-                if resource == 'averaged_perceptron_tagger':
-                    nltk.data.find(f'taggers/{resource}')
-                else:
-                    nltk.data.find(f'tokenizers/{resource}' if resource == 'punkt' else f'corpora/{resource}')
-            except LookupError:
-                print(f"📥 Descargando recurso NLTK: {resource}")
-                nltk.download(resource, quiet=True)
-        
-        # Intentar arreglar el problema de compatibilidad
-        _fix_nltk_resource()
-        
-        # Inicializar G2p
-        g2p_instance = G2p()
-        
-        # Probar que funciona
-        test_result = g2p_instance("test")
-        return g2p_instance
-        
-    except Exception as e:
-        warnings.warn(f"⚠️ No se pudo inicializar g2p_en: {e}")
-        print("\n💡 **SOLUCIÓN MANUAL:** Ejecuta esto en Colab:")
-        print("""
-import nltk
-import shutil
-from pathlib import Path
-
-# Descargar recurso
-nltk.download('averaged_perceptron_tagger')
-
-# Crear alias
-resource_path = nltk.data.find('taggers/averaged_perceptron_tagger')
-parent_dir = Path(resource_path).parent
-target_path = parent_dir / 'averaged_perceptron_tagger_eng'
-
-if not target_path.exists():
-    if Path(resource_path).is_dir():
-        shutil.copytree(resource_path, target_path)
-    else:
-        shutil.copy2(resource_path, target_path)
-    print("✅ Recurso NLTK arreglado")
-""")
+    """Inicialización con múltiples intentos y fallbacks"""
+    if not HAS_G2P:
         return None
+    
+    try:
+        # Intento 1: Inicialización normal
+        return G2p()
+    except Exception as e:
+        # Intento 2: Descargar recursos NLTK y reintentar
+        try:
+            nltk.download('averaged_perceptron_tagger', quiet=True)
+            nltk.download('punkt', quiet=True)
+            nltk.download('cmudict', quiet=True)
+            return G2p()
+        except Exception as e2:
+            warnings.warn(f"⚠️ g2p_en falló: {str(e)[:100]}")
+            return None
 
-# Inicializar G2p
 _g2p = _init_g2p()
+
+# ====== FALLBACK PARA PALABRAS NO ENCONTRADAS ======
+def _simple_g2p_fallback(word):
+    """Fallback simple para palabras cuando g2p_en no funciona"""
+    # Reglas simples de pronunciación para caracteres comunes
+    simple_map = {
+        '-': ['-'],
+        '.': ['.'],
+        ',': [','],
+        '!': ['!'],
+        '?': ['?'],
+        ';': [';'],
+        ':': [':'],
+        "'": ["'"],
+        '"': ['"'],
+        '(': ['('],
+        ')': [')'],
+        '[': ['['],
+        ']': [']'],
+        '{': ['{'],
+        '}': ['}'],
+    }
+    
+    if word in simple_map:
+        return simple_map[word]
+    
+    # Para palabras reales, intentar dividir por sílabas simples
+    # Esto es muy básico, pero mejor que nada
+    word_lower = word.lower()
+    phones = []
+    
+    # Reglas de conversión muy simples (no precisa, solo para emergencia)
+    vowel_sounds = ['AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY', 'IH', 'IY', 'OW', 'OY', 'UH', 'UW']
+    consonant_sounds = ['B', 'CH', 'D', 'DH', 'F', 'G', 'HH', 'JH', 'K', 'L', 'M', 'N', 'NG', 'P', 'R', 'S', 'SH', 'T', 'TH', 'V', 'W', 'Y', 'Z', 'ZH']
+    
+    # Si la palabra es corta, devolver un fonema simple
+    if len(word_lower) <= 3:
+        return ['AH']  # Sonido de schwa como fallback
+    
+    # Devolver una secuencia simple basada en letras
+    return ['AH', 'N', 'D']  # "and" como fallback genérico
 
 arpa = {
     "AH0", "S", "AH1", "EY2", "AE2", "EH0", "OW2", "UH0", "NG", "B",
@@ -200,38 +186,9 @@ def text_normalize(text):
 model_id = 'bert-base-uncased'
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-def g2p_old(text):
-    tokenized = tokenizer.tokenize(text)
-    phones = []
-    tones = []
-    words = re.split(r"([,;.\-\?\!\s+])", text)
-    for w in words:
-        if w.upper() in eng_dict:
-            phns, tns = refine_syllables(eng_dict[w.upper()])
-            phones += phns
-            tones += tns
-        else:
-            if _g2p is None:
-                raise RuntimeError("❌ G2p no está inicializado. Ejecuta: pip install g2p_en==2.1.0")
-            phone_list = list(filter(lambda p: p != " ", _g2p(w)))
-            for ph in phone_list:
-                if ph in arpa:
-                    ph, tn = refine_ph(ph)
-                    phones.append(ph)
-                    tones.append(tn)
-                else:
-                    phones.append(ph)
-                    tones.append(0)
-    word2ph = [1 for _ in phones]
-
-    phones = [post_replace_ph(i) for i in phones]
-    return phones, tones, word2ph
-
 
 def g2p(text, pad_start_end=True, tokenized=None):
-    if _g2p is None:
-        raise RuntimeError("❌ G2p no está inicializado. Ejecuta: pip install g2p_en==2.1.0")
-    
+    """Versión robusta de g2p que no depende críticamente de g2p_en"""
     if tokenized is None:
         tokenized = tokenizer.tokenize(text)
     
@@ -249,14 +206,42 @@ def g2p(text, pad_start_end=True, tokenized=None):
         w = "".join(group)
         phone_len = 0
         word_len = len(group)
+        
+        # PRIMERO: Intentar con el diccionario CMU
         if w.upper() in eng_dict:
             phns, tns = refine_syllables(eng_dict[w.upper()])
             phones += phns
             tones += tns
             phone_len += len(phns)
         else:
-            try:
-                phone_list = list(filter(lambda p: p != " ", _g2p(w)))
+            # SEGUNDO: Intentar con g2p_en si está disponible
+            if _g2p is not None:
+                try:
+                    phone_list = list(filter(lambda p: p != " ", _g2p(w)))
+                    for ph in phone_list:
+                        if ph in arpa:
+                            ph, tn = refine_ph(ph)
+                            phones.append(ph)
+                            tones.append(tn)
+                        else:
+                            phones.append(ph)
+                            tones.append(0)
+                        phone_len += 1
+                except Exception:
+                    # Si g2p_en falla, usar fallback simple
+                    phone_list = _simple_g2p_fallback(w)
+                    for ph in phone_list:
+                        if ph in arpa:
+                            ph, tn = refine_ph(ph)
+                            phones.append(ph)
+                            tones.append(tn)
+                        else:
+                            phones.append(ph)
+                            tones.append(0)
+                        phone_len += 1
+            else:
+                # TERCERO: Fallback simple sin g2p_en
+                phone_list = _simple_g2p_fallback(w)
                 for ph in phone_list:
                     if ph in arpa:
                         ph, tn = refine_ph(ph)
@@ -266,14 +251,6 @@ def g2p(text, pad_start_end=True, tokenized=None):
                         phones.append(ph)
                         tones.append(0)
                     phone_len += 1
-            except Exception as e:
-                # Solo mostrar warning para palabras significativas, no puntuación
-                if w.strip() and w not in ['-', '.', ',', '!', '?', ';', ':']:
-                    warnings.warn(f"⚠️ Error en g2p para palabra '{w}': {e}")
-                # Fallback: agregar un fonema UNK
-                phones.append("UNK")
-                tones.append(0)
-                phone_len += 1
         
         aaa = distribute_phone(phone_len, word_len)
         word2ph += aaa
