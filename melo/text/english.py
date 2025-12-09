@@ -2,6 +2,7 @@ import pickle
 import os
 import re
 import nltk
+import warnings
 from g2p_en import G2p
 
 from . import symbols
@@ -12,33 +13,93 @@ from .english_utils.number_norm import normalize_numbers
 from .japanese import distribute_phone
 
 from transformers import AutoTokenizer
-import warnings
 
 current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
 CACHE_PATH = os.path.join(current_file_path, "cmudict_cache.pickle")
 
-# ====== INICIALIZACIÓN ROBUSTA DE G2P ======
-def _init_g2p():
-    """Inicialización robusta de G2p con descarga automática de recursos NLTK"""
+# ====== SOLUCIÓN DEFINITIVA PARA G2P_EN 2.1.0 ======
+def _fix_nltk_resource():
+    """Arregla el problema de compatibilidad entre g2p_en 2.1.0 y NLTK"""
     try:
-        # Descargar recursos NLTK necesarios
-        nltk_resources = ['averaged_perceptron_tagger', 'punkt', 'cmudict']
-        for resource in nltk_resources:
+        # Descargar el recurso correcto
+        nltk.download('averaged_perceptron_tagger', quiet=True)
+        
+        # Encontrar la ruta del recurso
+        resource_path = nltk.data.find('taggers/averaged_perceptron_tagger')
+        
+        # g2p_en 2.1.0 busca 'averaged_perceptron_tagger_eng' en lugar de 'averaged_perceptron_tagger'
+        # Crear un alias simbólico si es posible
+        import shutil
+        from pathlib import Path
+        
+        # Obtener el directorio padre
+        parent_dir = Path(resource_path).parent
+        target_name = 'averaged_perceptron_tagger_eng'
+        target_path = parent_dir / target_name
+        
+        if not target_path.exists():
+            # Crear una copia con el nombre que espera g2p_en
+            if Path(resource_path).is_dir():
+                shutil.copytree(resource_path, target_path)
+            else:
+                shutil.copy2(resource_path, target_path)
+            print(f"✅ Creado alias para recurso NLTK: {target_name}")
+            
+    except Exception as e:
+        warnings.warn(f"⚠️ No se pudo arreglar recurso NLTK: {e}")
+
+def _init_g2p():
+    """Inicialización robusta de G2p con compatibilidad completa"""
+    try:
+        # Descargar todos los recursos necesarios
+        resources = ['averaged_perceptron_tagger', 'punkt', 'cmudict']
+        for resource in resources:
             try:
-                nltk.data.find(f'taggers/{resource}' if resource == 'averaged_perceptron_tagger' else f'tokenizers/{resource}' if resource == 'punkt' else f'corpora/{resource}')
+                if resource == 'averaged_perceptron_tagger':
+                    nltk.data.find(f'taggers/{resource}')
+                else:
+                    nltk.data.find(f'tokenizers/{resource}' if resource == 'punkt' else f'corpora/{resource}')
             except LookupError:
                 print(f"📥 Descargando recurso NLTK: {resource}")
                 nltk.download(resource, quiet=True)
         
+        # Intentar arreglar el problema de compatibilidad
+        _fix_nltk_resource()
+        
         # Inicializar G2p
-        return G2p()
+        g2p_instance = G2p()
+        
+        # Probar que funciona
+        test_result = g2p_instance("test")
+        return g2p_instance
+        
     except Exception as e:
         warnings.warn(f"⚠️ No se pudo inicializar g2p_en: {e}")
-        print("💡 Solución: Ejecuta en Colab: pip install g2p_en==2.1.0")
+        print("\n💡 **SOLUCIÓN MANUAL:** Ejecuta esto en Colab:")
+        print("""
+import nltk
+import shutil
+from pathlib import Path
+
+# Descargar recurso
+nltk.download('averaged_perceptron_tagger')
+
+# Crear alias
+resource_path = nltk.data.find('taggers/averaged_perceptron_tagger')
+parent_dir = Path(resource_path).parent
+target_path = parent_dir / 'averaged_perceptron_tagger_eng'
+
+if not target_path.exists():
+    if Path(resource_path).is_dir():
+        shutil.copytree(resource_path, target_path)
+    else:
+        shutil.copy2(resource_path, target_path)
+    print("✅ Recurso NLTK arreglado")
+""")
         return None
 
-# Inicializar G2p con manejo de errores
+# Inicializar G2p
 _g2p = _init_g2p()
 
 arpa = {
@@ -206,7 +267,9 @@ def g2p(text, pad_start_end=True, tokenized=None):
                         tones.append(0)
                     phone_len += 1
             except Exception as e:
-                warnings.warn(f"⚠️ Error en g2p para palabra '{w}': {e}")
+                # Solo mostrar warning para palabras significativas, no puntuación
+                if w.strip() and w not in ['-', '.', ',', '!', '?', ';', ':']:
+                    warnings.warn(f"⚠️ Error en g2p para palabra '{w}': {e}")
                 # Fallback: agregar un fonema UNK
                 phones.append("UNK")
                 tones.append(0)
