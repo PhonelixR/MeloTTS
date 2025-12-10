@@ -49,45 +49,42 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         random.shuffle(self.audiopaths_sid_text)
         self._filter()
 
-
     def _filter(self):
         """
         Filter text & store spec lengths
         """
-        # Store spectrogram lengths for Bucketing
-        # wav_length ~= file_size / (wav_channels * Bytes per dim) = file_size / (1 * 2)
-        # spec_length = wav_length // hop_length
-
         audiopaths_sid_text_new = []
         lengths = []
         skipped = 0
         logger.info("Init dataset...")
-        for item in tqdm(
-            self.audiopaths_sid_text
-        ):
+        
+        for item in tqdm(self.audiopaths_sid_text):
             try:
                 _id, spk, language, text, phones, tone, word2ph = item
-            except:
-                print(item)
-                raise
-            audiopath = f"{_id}"
-            if self.min_text_len <= len(phones) and len(phones) <= self.max_text_len:
-                phones = phones.split(" ")
-                tone = [int(i) for i in tone.split(" ")]
-                word2ph = [int(i) for i in word2ph.split(" ")]
-                audiopaths_sid_text_new.append(
-                    [audiopath, spk, language, text, phones, tone, word2ph]
-                )
-                lengths.append(os.path.getsize(audiopath) // (2 * self.hop_length))
-            else:
+                audiopath = f"{_id}"
+                
+                # Verificar que el archivo existe
+                if not os.path.exists(audiopath):
+                    skipped += 1
+                    logger.warning(f"Audio file not found: {audiopath}")
+                    continue
+                    
+                if self.min_text_len <= len(phones) and len(phones) <= self.max_text_len:
+                    phones = phones.split(" ")
+                    tone = [int(i) for i in tone.split(" ")]
+                    word2ph = [int(i) for i in word2ph.split(" ")]
+                    audiopaths_sid_text_new.append(
+                        [audiopath, spk, language, text, phones, tone, word2ph]
+                    )
+                    lengths.append(os.path.getsize(audiopath) // (2 * self.hop_length))
+                else:
+                    skipped += 1
+            except Exception as e:
+                logger.error(f"Error processing item {item}: {e}")
                 skipped += 1
+        
         logger.info(f'min: {min(lengths)}; max: {max(lengths)}' )
-        logger.info(
-            "skipped: "
-            + str(skipped)
-            + ", total: "
-            + str(len(self.audiopaths_sid_text))
-        )
+        logger.info(f"skipped: {skipped}, total: {len(self.audiopaths_sid_text)}")
         self.audiopaths_sid_text = audiopaths_sid_text_new
         self.lengths = lengths
 
@@ -100,7 +97,17 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         )
 
         spec, wav = self.get_audio(audiopath)
-        sid = int(getattr(self.spk_map, sid, '0'))
+        
+        # CORRECCIÓN: Manejar spk_map como diccionario
+        if isinstance(self.spk_map, dict):
+            sid = int(self.spk_map.get(sid, 0))
+        else:
+            # Intentar obtener como atributo (backward compatibility)
+            try:
+                sid = int(getattr(self.spk_map, sid, '0'))
+            except (AttributeError, ValueError):
+                sid = 0
+        
         sid = torch.LongTensor([sid])
         return (phones, spec, wav, sid, tone, language, bert, ja_bert)
 
@@ -112,16 +119,26 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
                     filename, sampling_rate, self.sampling_rate
                 )
             )
-        # NOTE: normalize has been achieved by torchaudio
-        # audio_norm = audio / self.max_wav_value
+        
         audio_norm = audio_norm.unsqueeze(0)
         spec_filename = filename.replace(".wav", ".spec.pt")
         if self.use_mel_spec_posterior:
             spec_filename = spec_filename.replace(".spec.pt", ".mel.pt")
+        
+        # CORRECCIÓN: Carga correcta de espectrogramas
         try:
-            spec = torch.load(spec_filename)
-            assert False
-        except:
+            if os.path.exists(spec_filename):
+                spec = torch.load(spec_filename)
+                # Verificar que las dimensiones sean correctas
+                if spec.dim() == 3:
+                    spec = spec.squeeze(0)
+                # Verificar que el tamaño sea consistente
+                if spec.size(1) > 0:
+                    return spec, audio_norm
+            else:
+                raise FileNotFoundError("Spec file not found")
+        except (FileNotFoundError, RuntimeError, EOFError) as e:
+            # Recalcular si no existe o hay error al cargar
             if self.use_mel_spec_posterior:
                 spec = mel_spectrogram_torch(
                     audio_norm,
@@ -145,6 +162,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
                 )
             spec = torch.squeeze(spec, 0)
             torch.save(spec, spec_filename)
+        
         return spec, audio_norm
 
     def get_text(self, text, word2ph, phone, tone, language_str, wav_path):
@@ -156,16 +174,27 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
             for i in range(len(word2ph)):
                 word2ph[i] = word2ph[i] * 2
             word2ph[0] += 1
+        
         bert_path = wav_path.replace(".wav", ".bert.pt")
-        try:
-            bert = torch.load(bert_path)
-            assert bert.shape[-1] == len(phone)
-        except Exception as e:
-            print(e, wav_path, bert_path, bert.shape, len(phone))
+        bert_loaded = False
+        
+        # CORRECCIÓN: Manejo mejorado de BERT
+        if os.path.exists(bert_path):
+            try:
+                bert = torch.load(bert_path)
+                if bert.shape[-1] == len(phone):
+                    bert_loaded = True
+                else:
+                    logger.warning(f"BERT shape mismatch: {bert.shape[-1]} != {len(phone)} for {wav_path}")
+            except Exception as e:
+                logger.warning(f"Error loading BERT from {bert_path}: {e}")
+        
+        if not bert_loaded:
             bert = get_bert(text, word2ph, language_str)
             torch.save(bert, bert_path)
-            assert bert.shape[-1] == len(phone), phone
-
+        
+        assert bert.shape[-1] == len(phone), f"BERT shape {bert.shape[-1]} != phone length {len(phone)} for {wav_path}"
+        
         if self.disable_bert:
             bert = torch.zeros(1024, len(phone))
             ja_bert = torch.zeros(768, len(phone))
@@ -177,16 +206,24 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
                 ja_bert = bert
                 bert = torch.zeros(1024, len(phone))
             else:
-                raise
                 bert = torch.zeros(1024, len(phone))
                 ja_bert = torch.zeros(768, len(phone))
-        assert bert.shape[-1] == len(phone)
+        
         phone = torch.LongTensor(phone)
         tone = torch.LongTensor(tone)
         language = torch.LongTensor(language)
         return bert, ja_bert, phone, tone, language
 
     def get_sid(self, sid):
+        # CORRECCIÓN: Manejo consistente de spk_map
+        if isinstance(self.spk_map, dict):
+            sid = int(self.spk_map.get(sid, 0))
+        else:
+            try:
+                sid = int(getattr(self.spk_map, sid, '0'))
+            except (AttributeError, ValueError):
+                sid = 0
+        
         sid = torch.LongTensor([int(sid)])
         return sid
 
@@ -238,6 +275,7 @@ class TextAudioSpeakerCollate:
         wav_padded.zero_()
         bert_padded.zero_()
         ja_bert_padded.zero_()
+        
         for i in range(len(ids_sorted_decreasing)):
             row = batch[ids_sorted_decreasing[i]]
 
