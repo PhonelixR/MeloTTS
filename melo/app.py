@@ -58,29 +58,13 @@ with gr.Blocks() as demo:
 @click.option('--host', '-h', default=None)
 @click.option('--port', '-p', type=int, default=None)
 def main(share, host, port):
-    # Detectar versión de Gradio y usar parámetros apropiados
-    import gradio as gr_version_check
-    
-    # Obtener versión de Gradio
-    gradio_version = gr_version_check.__version__
-    version_parts = list(map(int, gradio_version.split('.')))
-    
-    # Configurar parámetros de lanzamiento basados en la versión
-    launch_params = {
-        'share': share,
-        'server_name': host,
-        'server_port': port
-    }
-    
-    # Para Gradio 6.0 o superior, usar footer_links
-    if version_parts[0] >= 6:
-        launch_params['footer_links'] = ['gradio', 'settings']
-    else:
-        # Para Gradio 5.x, usar show_api
-        launch_params['show_api'] = False
-    
-    # Lanzar la aplicación
-    demo.queue(api_open=False).launch(**launch_params)
+    # Para Gradio 5.50.0, usamos show_api (no footer_links que es para Gradio 6.0+)
+    demo.queue(api_open=False).launch(
+        show_api=False,
+        share=share, 
+        server_name=host, 
+        server_port=port
+    )
 
 if __name__ == "__main__":
     main()
