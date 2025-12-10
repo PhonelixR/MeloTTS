@@ -4,13 +4,24 @@ import re
 import nltk
 import warnings
 
-# Intentar importar g2p_en, pero con manejo robusto de errores
+# ====== INICIALIZACIÓN ROBUSTA DE g2p_en ======
 try:
     from g2p_en import G2p
-    HAS_G2P = True
-except ImportError:
+    # Verificar que la API sea compatible
+    try:
+        _test_g2p = G2p()
+        # Verificar que el objeto sea llamable y tenga métodos esperados
+        if hasattr(_test_g2p, '__call__') or callable(_test_g2p):
+            HAS_G2P = True
+        else:
+            HAS_G2P = False
+            warnings.warn("g2p_en no tiene la API esperada (no es callable)")
+    except (TypeError, AttributeError) as e:
+        HAS_G2P = False
+        warnings.warn(f"g2p_en API incompatible: {str(e)[:100]}")
+except ImportError as e:
     HAS_G2P = False
-    warnings.warn("⚠️ g2p_en no está instalado. Usando diccionario CMU y fallback simple.")
+    warnings.warn("g2p_en no está instalado. Usando diccionario CMU y fallback simple.")
 
 from . import symbols
 
@@ -25,33 +36,64 @@ current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
 CACHE_PATH = os.path.join(current_file_path, "cmudict_cache.pickle")
 
-# ====== INICIALIZACIÓN ROBUSTA ======
+# ====== INICIALIZACIÓN ROBUSTA DE G2P ======
 def _init_g2p():
     """Inicialización con múltiples intentos y fallbacks"""
     if not HAS_G2P:
         return None
-    
+
     try:
         # Intento 1: Inicialización normal
         return G2p()
     except Exception as e:
         # Intento 2: Descargar recursos NLTK y reintentar
         try:
-            nltk.download('averaged_perceptron_tagger', quiet=True)
-            nltk.download('punkt', quiet=True)
-            nltk.download('cmudict', quiet=True)
+            nltk.download('averaged_perceptron_tagger', quiet=True, raise_on_error=False)
+            nltk.download('punkt', quiet=True, raise_on_error=False)
+            nltk.download('cmudict', quiet=True, raise_on_error=False)
             return G2p()
         except Exception as e2:
-            warnings.warn(f"⚠️ g2p_en falló: {str(e)[:100]}")
+            warnings.warn(f"g2p_en falló: {str(e2)[:100]}")
             return None
 
 _g2p = _init_g2p()
 
-# ====== FALLBACK PARA PALABRAS NO ENCONTRADAS ======
+# ====== FALLBACK MEJORADO PARA PALABRAS NO ENCONTRADAS ======
 def _simple_g2p_fallback(word):
-    """Fallback simple para palabras cuando g2p_en no funciona"""
-    # Reglas simples de pronunciación para caracteres comunes
-    simple_map = {
+    """Fallback mejorado basado en reglas básicas y diccionario común"""
+    # Mapa de pronunciación común para palabras frecuentes
+    common_words = {
+        'the': ['DH', 'AH'],
+        'and': ['AE', 'N', 'D'],
+        'that': ['DH', 'AE', 'T'],
+        'for': ['F', 'AO', 'R'],
+        'with': ['W', 'IH', 'DH'],
+        'this': ['DH', 'IH', 'S'],
+        'have': ['HH', 'AE', 'V'],
+        'from': ['F', 'R', 'AH', 'M'],
+        'you': ['Y', 'UW'],
+        'are': ['AA', 'R'],
+        'is': ['IH', 'Z'],
+        'to': ['T', 'UW'],
+        'in': ['IH', 'N'],
+        'it': ['IH', 'T'],
+        'of': ['AH', 'V'],
+        'be': ['B', 'IY'],
+        'as': ['AE', 'Z'],
+        'at': ['AE', 'T'],
+        'by': ['B', 'AY'],
+        'or': ['AO', 'R'],
+        'but': ['B', 'AH', 'T'],
+        'not': ['N', 'AA', 'T'],
+        'on': ['AA', 'N'],
+        'was': ['W', 'AA', 'Z'],
+        'were': ['W', 'ER'],
+        'will': ['W', 'IH', 'L'],
+        'would': ['W', 'UH', 'D'],
+    }
+
+    # Símbolos de puntuación
+    punctuation_map = {
         '-': ['-'],
         '.': ['.'],
         ',': [','],
@@ -68,25 +110,52 @@ def _simple_g2p_fallback(word):
         '{': ['{'],
         '}': ['}'],
     }
-    
-    if word in simple_map:
-        return simple_map[word]
-    
-    # Para palabras reales, intentar dividir por sílabas simples
-    # Esto es muy básico, pero mejor que nada
+
     word_lower = word.lower()
-    phones = []
     
-    # Reglas de conversión muy simples (no precisa, solo para emergencia)
-    vowel_sounds = ['AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY', 'IH', 'IY', 'OW', 'OY', 'UH', 'UW']
-    consonant_sounds = ['B', 'CH', 'D', 'DH', 'F', 'G', 'HH', 'JH', 'K', 'L', 'M', 'N', 'NG', 'P', 'R', 'S', 'SH', 'T', 'TH', 'V', 'W', 'Y', 'Z', 'ZH']
+    # 1. Puntuación
+    if word in punctuation_map:
+        return punctuation_map[word]
     
-    # Si la palabra es corta, devolver un fonema simple
+    # 2. Palabras comunes
+    if word_lower in common_words:
+        return common_words[word_lower]
+    
+    # 3. Reglas básicas de pronunciación para sufijos comunes
+    if word_lower.endswith('ing'):
+        return ['IH', 'NG']
+    elif word_lower.endswith('ed'):
+        return ['D']
+    elif word_lower.endswith('s'):
+        return ['Z']
+    elif word_lower.endswith('ly'):
+        return ['L', 'IY']
+    elif word_lower.endswith('er'):
+        return ['ER']
+    elif word_lower.endswith('est'):
+        return ['EH', 'S', 'T']
+    
+    # 4. Para palabras muy cortas (1-3 letras), usar sonido simple
     if len(word_lower) <= 3:
-        return ['AH']  # Sonido de schwa como fallback
+        # Intentar adivinar basado en vocales
+        if any(vowel in word_lower for vowel in 'aeiou'):
+            return ['AH']  # Schwa
+        else:
+            return ['AH', 'N']  # Sonido "un"
     
-    # Devolver una secuencia simple basada en letras
-    return ['AH', 'N', 'D']  # "and" como fallback genérico
+    # 5. Fallback genérico - dividir en sílabas muy básicas
+    phones = []
+    for char in word_lower:
+        if char in 'aeiou':
+            phones.append('AH')
+        elif char in 'bcdfghjklmnpqrstvwxyz':
+            phones.append(char.upper())
+    
+    # Si no se generó nada, usar schwa
+    if not phones:
+        phones = ['AH']
+    
+    return phones[:3]  # Limitar a 3 fonemas máximo
 
 arpa = {
     "AH0", "S", "AH1", "EY2", "AE2", "EH0", "OW2", "UH0", "NG", "B",
@@ -183,41 +252,80 @@ def text_normalize(text):
     text = expand_abbreviations(text)
     return text
 
+# ====== TOKENIZER CON MANEJO DE ERRORES ======
 model_id = 'bert-base-uncased'
-tokenizer = AutoTokenizer.from_pretrained(model_id)
+tokenizer = None
+
+try:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+except Exception as e:
+    warnings.warn(f"Error cargando tokenizer {model_id}: {e}")
+    try:
+        # Intentar cargar desde cache local
+        tokenizer = AutoTokenizer.from_pretrained('./bert/bert-base-uncased', local_files_only=True)
+    except Exception as e2:
+        warnings.warn(f"No se pudo cargar tokenizer: {e2}")
+        # Crear un tokenizer dummy como último recurso
+        class DummyTokenizer:
+            def tokenize(self, text):
+                return text.split()
+        tokenizer = DummyTokenizer()
 
 
 def g2p(text, pad_start_end=True, tokenized=None):
-    """Versión robusta de g2p que no depende críticamente de g2p_en"""
+    """Versión robusta de g2p que maneja múltiples fallbacks"""
     if tokenized is None:
         tokenized = tokenizer.tokenize(text)
-    
+
     ph_groups = []
     for t in tokenized:
         if not t.startswith("#"):
             ph_groups.append([t])
         else:
             ph_groups[-1].append(t.replace("#", ""))
-    
+
     phones = []
     tones = []
     word2ph = []
+    
     for group in ph_groups:
         w = "".join(group)
         phone_len = 0
         word_len = len(group)
-        
+
         # PRIMERO: Intentar con el diccionario CMU
         if w.upper() in eng_dict:
-            phns, tns = refine_syllables(eng_dict[w.upper()])
-            phones += phns
-            tones += tns
-            phone_len += len(phns)
-        else:
+            try:
+                phns, tns = refine_syllables(eng_dict[w.upper()])
+                phones += phns
+                tones += tns
+                phone_len += len(phns)
+            except Exception as e:
+                warnings.warn(f"Error procesando {w} en CMU dict: {e}")
+                # Continuar con otros métodos
+                pass
+        
+        # Si no se encontró en CMU o hubo error, usar otros métodos
+        if phone_len == 0:
             # SEGUNDO: Intentar con g2p_en si está disponible
             if _g2p is not None:
                 try:
-                    phone_list = list(filter(lambda p: p != " ", _g2p(w)))
+                    phone_list = []
+                    # Manejar diferentes APIs de g2p_en
+                    if callable(_g2p):
+                        result = _g2p(w)
+                        # Convertir a lista y filtrar espacios
+                        if isinstance(result, list):
+                            phone_list = [p for p in result if p != " "]
+                        elif isinstance(result, str):
+                            phone_list = result.split()
+                        else:
+                            # Intentar iterar
+                            phone_list = list(result)
+                    else:
+                        # Asumir que es un objeto con método __call__ o similar
+                        phone_list = list(_g2p(w))
+                    
                     for ph in phone_list:
                         if ph in arpa:
                             ph, tn = refine_ph(ph)
@@ -227,8 +335,9 @@ def g2p(text, pad_start_end=True, tokenized=None):
                             phones.append(ph)
                             tones.append(0)
                         phone_len += 1
-                except Exception:
-                    # Si g2p_en falla, usar fallback simple
+                except Exception as e:
+                    warnings.warn(f"g2p_en falló para '{w}': {e}")
+                    # Usar fallback simple
                     phone_list = _simple_g2p_fallback(w)
                     for ph in phone_list:
                         if ph in arpa:
@@ -251,27 +360,34 @@ def g2p(text, pad_start_end=True, tokenized=None):
                         phones.append(ph)
                         tones.append(0)
                     phone_len += 1
-        
-        aaa = distribute_phone(phone_len, word_len)
-        word2ph += aaa
-    
+
+        # Distribuir fonemas a palabras
+        if phone_len > 0:
+            aaa = distribute_phone(phone_len, word_len)
+            word2ph += aaa
+        else:
+            # Si todo falla, asignar 1 fonema por palabra
+            word2ph += [1] * word_len
+            phones += ['AH'] * word_len
+            tones += [0] * word_len
+
     phones = [post_replace_ph(i) for i in phones]
 
     if pad_start_end:
         phones = ["_"] + phones + ["_"]
         tones = [0] + tones + [0]
         word2ph = [1] + word2ph + [1]
-    
+
     return phones, tones, word2ph
 
 
 def get_bert_feature(text, word2ph, device=None):
-    from text import english_bert
+    from . import english_bert
     return english_bert.get_bert_feature(text, word2ph, device=device)
 
 
 if __name__ == "__main__":
-    from text.english_bert import get_bert_feature
+    from .english_bert import get_bert_feature
     text = "In this paper, we propose 1 DSPGAN, a N-F-T GAN-based universal vocoder."
     text = text_normalize(text)
     phones, tones, word2ph = g2p(text)
