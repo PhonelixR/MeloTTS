@@ -28,3 +28,4 @@ langid
 tqdm
 tensorboard
 loguru
+nltk
